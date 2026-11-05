@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use openlogi_core::device::{Capabilities, DeviceKind, RawDeviceAddress, StandaloneDevice};
+use openlogi_device_registry::darmoshark::{DARMOSHARK_DRIVER_ID, find_darmoshark};
 use openlogi_device_registry::g600::{G600_DRIVER_ID, G600_NAME, matches_g600};
 use openlogi_device_registry::headset::{GAMING_HEADSET_DRIVER_ID, find_gaming_headset};
 use openlogi_device_registry::litra::find_litra;
@@ -85,6 +86,37 @@ pub(super) fn standalone_device(device: &crate::backend::NodeInfo) -> Option<Sta
         });
     }
 
+    if let Some(descriptor) = find_darmoshark(
+        device.vendor_id,
+        device.product_id,
+        device.usage_page,
+        device.usage_id,
+    ) {
+        return Some(StandaloneDevice {
+            address: RawDeviceAddress {
+                vendor_id: device.vendor_id,
+                product_id: device.product_id,
+                usage_page: device.usage_page,
+                usage_id: device.usage_id,
+                identity: device.identity(),
+            },
+            display_name: descriptor.name.to_owned(),
+            manufacturer: device.manufacturer.clone(),
+            serial_number: device.serial_number.clone(),
+            unit_id: [0; 4],
+            kind: DeviceKind::Mouse,
+            online: true,
+            // Measured, not unknown: this driver has an identity and a wire
+            // codec but no write path yet. `None` would make clients presume
+            // the mouse's HID++ button/pointer controls, which this raw-HID
+            // device does not serve; the raw protocol has its own settings.
+            capabilities: Some(Capabilities::default()),
+            light_capabilities: None,
+            driver_id: DARMOSHARK_DRIVER_ID.to_owned(),
+            registry_model_id: None,
+        });
+    }
+
     if matches_g600(
         device.vendor_id,
         device.product_id,
@@ -159,6 +191,7 @@ fn validate_no_ambiguous_nodes(devices: &[StandaloneDevice]) -> Result<(), Inven
 #[cfg(test)]
 mod tests {
     use openlogi_core::device::{Capabilities, DeviceKind, RawDeviceAddress, StandaloneDevice};
+    use openlogi_device_registry::darmoshark::DARMOSHARK_DRIVER_ID;
 
     use crate::backend::{NodeId, NodeInfo};
     use crate::write::matches_litra;
@@ -199,6 +232,39 @@ mod tests {
     fn g600_mouse_and_keyboard_collections_are_ignored() {
         assert!(standalone_device(&g600_node(0x0001, 0x0002)).is_none());
         assert!(standalone_device(&g600_node(0x0001, 0x0006)).is_none());
+    }
+
+    fn darmoshark_node(usage_page: u16, usage_id: u16) -> NodeInfo {
+        NodeInfo {
+            id: NodeId::from("darmoshark-node".to_string()),
+            vendor_id: 0x1915,
+            product_id: 0x0723,
+            usage_page,
+            usage_id,
+            name: "MOJI 1K NRF Receiver".into(),
+            manufacturer: Some("Darmoshark".into()),
+            serial_number: None,
+        }
+    }
+
+    #[test]
+    fn darmoshark_configuration_collection_is_an_identity_only_mouse() {
+        let device =
+            standalone_device(&darmoshark_node(0xff0a, 0x0001)).expect("config channel recognized");
+
+        assert_eq!(device.kind, DeviceKind::Mouse);
+        assert_eq!(device.display_name, "Darmoshark M3S Pro (2.4 GHz)");
+        assert_eq!(device.driver_id, DARMOSHARK_DRIVER_ID);
+        assert_eq!(device.address.identity, "id:darmoshark-node");
+        assert_eq!(device.capabilities, Some(Capabilities::default()));
+        assert!(device.light_capabilities.is_none());
+    }
+
+    #[test]
+    fn darmoshark_plain_hid_collections_are_ignored() {
+        assert!(standalone_device(&darmoshark_node(0x0001, 0x0002)).is_none());
+        assert!(standalone_device(&darmoshark_node(0x0001, 0x0006)).is_none());
+        assert!(standalone_device(&darmoshark_node(0x000c, 0x0001)).is_none());
     }
 
     fn raw(identity: &str) -> StandaloneDevice {
