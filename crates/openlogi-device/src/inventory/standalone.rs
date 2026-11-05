@@ -86,35 +86,8 @@ pub(super) fn standalone_device(device: &crate::backend::NodeInfo) -> Option<Sta
         });
     }
 
-    if let Some(descriptor) = find_darmoshark(
-        device.vendor_id,
-        device.product_id,
-        device.usage_page,
-        device.usage_id,
-    ) {
-        return Some(StandaloneDevice {
-            address: RawDeviceAddress {
-                vendor_id: device.vendor_id,
-                product_id: device.product_id,
-                usage_page: device.usage_page,
-                usage_id: device.usage_id,
-                identity: device.identity(),
-            },
-            display_name: descriptor.name.to_owned(),
-            manufacturer: device.manufacturer.clone(),
-            serial_number: device.serial_number.clone(),
-            unit_id: [0; 4],
-            kind: DeviceKind::Mouse,
-            online: true,
-            // Measured, not unknown: this driver has an identity and a wire
-            // codec but no write path yet. `None` would make clients presume
-            // the mouse's HID++ button/pointer controls, which this raw-HID
-            // device does not serve; the raw protocol has its own settings.
-            capabilities: Some(Capabilities::default()),
-            light_capabilities: None,
-            driver_id: DARMOSHARK_DRIVER_ID.to_owned(),
-            registry_model_id: None,
-        });
+    if let Some(standalone) = darmoshark_standalone(device) {
+        return Some(standalone);
     }
 
     if matches_g600(
@@ -147,6 +120,41 @@ pub(super) fn standalone_device(device: &crate::backend::NodeInfo) -> Option<Sta
     }
 
     None
+}
+
+/// Builds the identity-only inventory record for a Darmoshark configuration
+/// node. Returns `None` for the product's plain HID collections and for any
+/// other vendor.
+fn darmoshark_standalone(device: &crate::backend::NodeInfo) -> Option<StandaloneDevice> {
+    let descriptor = find_darmoshark(
+        device.vendor_id,
+        device.product_id,
+        device.usage_page,
+        device.usage_id,
+    )?;
+    Some(StandaloneDevice {
+        address: RawDeviceAddress {
+            vendor_id: device.vendor_id,
+            product_id: device.product_id,
+            usage_page: device.usage_page,
+            usage_id: device.usage_id,
+            identity: device.identity(),
+        },
+        display_name: descriptor.name.to_owned(),
+        manufacturer: device.manufacturer.clone(),
+        serial_number: device.serial_number.clone(),
+        unit_id: [0; 4],
+        kind: DeviceKind::Mouse,
+        online: true,
+        // Measured, not unknown: this driver has an identity and a wire codec
+        // but no write path yet. `None` would make clients presume the mouse's
+        // HID++ button/pointer controls, which this raw-HID device does not
+        // serve; the raw protocol has its own settings.
+        capabilities: Some(Capabilities::default()),
+        light_capabilities: None,
+        driver_id: DARMOSHARK_DRIVER_ID.to_owned(),
+        registry_model_id: None,
+    })
 }
 
 /// Reject multiple nodes that the route cannot distinguish safely.
