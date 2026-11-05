@@ -22,6 +22,7 @@ mod keypad_vendor;
 
 pub mod backend;
 pub mod backlight;
+pub mod darmoshark;
 pub mod host_lock;
 pub mod inventory;
 pub mod pairing;
