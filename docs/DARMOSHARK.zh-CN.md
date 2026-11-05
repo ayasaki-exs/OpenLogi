@@ -24,8 +24,9 @@ OpenLogi 的 inventory、GUI 和 CLI 能够看到它。这是实验性的“仅�
 - `None` 会让客户端回退到 `Capabilities::presumed_from_kind`，从而假定该设备
   拥有它并不提供的 HID++ 按键和指针控制。
 - `Some(Capabilities::default())` 表示“已测量：没有可配置的 HID++ 功能”。这与
-  G600 的先例一致。OpenLogi 仍可能显示 Pointer 标签页，因为主机侧软件滚轮反转
-  可用；DPI/回报率面板不会出现，因为对应能力位为 false。
+  G600 的先例一致。Linux 和 macOS 上仍可能显示 Pointer 标签页，因为软件滚轮反转
+  是主机侧功能；DPI 和回报率的能力位为 false，因此不会声称提供这两项控制。在
+  P2 写入路径完成前，DPI 面板可能显示“不支持/读取失败”状态。
 
 ## 代码地图
 

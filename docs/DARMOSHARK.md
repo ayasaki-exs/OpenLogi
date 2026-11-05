@@ -26,10 +26,11 @@ The device appears as a `DeviceKind::Mouse` in the standalone inventory. Its
 - `None` would make clients fall back to `Capabilities::presumed_from_kind`,
   which presumes HID++ button and pointer controls this device does not serve.
 - `Some(Capabilities::default())` says "measured: no configurable HID++
-  features". This follows the G600 precedent. OpenLogi may still show the
-  Pointer tab because software scroll inversion is available on the host; the
-  DPI/report-rate panels are not offered because their capability flags are
-  false.
+  features". This follows the G600 precedent. On Linux and macOS the Pointer
+  tab may still appear because software scroll inversion is a host feature;
+  the DPI and report-rate capability flags are false, so neither control is
+  claimed. The DPI panel may show an unsupported/read-failure state until the
+  P2 write path exists.
 
 ## Code map
 
