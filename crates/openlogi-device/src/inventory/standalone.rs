@@ -122,9 +122,8 @@ pub(super) fn standalone_device(device: &crate::backend::NodeInfo) -> Option<Sta
     None
 }
 
-/// Builds the identity-only inventory record for a Darmoshark configuration
-/// node. Returns `None` for the product's plain HID collections and for any
-/// other vendor.
+/// Builds the inventory record for a Darmoshark configuration node. Returns
+/// `None` for the product's plain HID collections and for any other vendor.
 fn darmoshark_standalone(device: &crate::backend::NodeInfo) -> Option<StandaloneDevice> {
     let descriptor = find_darmoshark(
         device.vendor_id,
@@ -146,11 +145,15 @@ fn darmoshark_standalone(device: &crate::backend::NodeInfo) -> Option<Standalone
         unit_id: [0; 4],
         kind: DeviceKind::Mouse,
         online: true,
-        // Measured, not unknown: this driver has an identity and a wire codec
-        // but no write path yet. `None` would make clients presume the mouse's
-        // HID++ button/pointer controls, which this raw-HID device does not
-        // serve; the raw protocol has its own settings.
-        capabilities: Some(Capabilities::default()),
+        // Driver-advertised capabilities, not HID++ feature bits: the raw
+        // driver implements DPI and report-rate reads/writes. Only claim what
+        // it can serve — buttons and lighting stay off, so `None` (which would
+        // presume a mouse's HID++ controls) is not an option here.
+        capabilities: Some(Capabilities {
+            pointer: true,
+            report_rate: true,
+            ..Capabilities::default()
+        }),
         light_capabilities: None,
         driver_id: DARMOSHARK_DRIVER_ID.to_owned(),
         registry_model_id: None,
@@ -256,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn darmoshark_configuration_collection_is_an_identity_only_mouse() {
+    fn darmoshark_configuration_collection_advertises_the_raw_driver() {
         let device =
             standalone_device(&darmoshark_node(0xff0a, 0x0001)).expect("config channel recognized");
 
@@ -264,7 +267,14 @@ mod tests {
         assert_eq!(device.display_name, "Darmoshark M3S Pro (2.4 GHz)");
         assert_eq!(device.driver_id, DARMOSHARK_DRIVER_ID);
         assert_eq!(device.address.identity, "id:darmoshark-node");
-        assert_eq!(device.capabilities, Some(Capabilities::default()));
+        assert_eq!(
+            device.capabilities,
+            Some(Capabilities {
+                pointer: true,
+                report_rate: true,
+                ..Capabilities::default()
+            })
+        );
         assert!(device.light_capabilities.is_none());
     }
 

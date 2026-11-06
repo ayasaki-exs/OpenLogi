@@ -283,9 +283,10 @@ pub struct Power {
 /// Full base configuration read back from the device.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BaseInfo {
-    /// X DPI values for up to ten slots. For `dms_v2`, only slots 0..5 are
-    /// populated; the Y-axis candidate overlaps the report-rate byte and is
-    /// therefore not modelled.
+    /// DPI pairs: slots 0..5 hold X, slots 5..10 hold the matching Y. A
+    /// `dms` base-info response carries five such pairs (ten `u16` values)
+    /// starting at byte 8. For `dms_v2`, only slots 0..5 are populated; the
+    /// Y-axis candidate overlaps the report-rate byte and is not modelled.
     pub dpi: [u16; 10],
     /// Number of enabled DPI levels.
     pub level_count: u8,
@@ -386,9 +387,13 @@ pub fn parse_base_info(resp: &[u8; REPORT_LEN], contract: Contract) -> BaseInfo 
     match contract {
         Contract::Dms => {
             let mut info = BaseInfo::default();
-            for (index, slot) in info.dpi.iter_mut().enumerate() {
-                let base = 8 + 2 * index;
-                *slot = u16::from_le_bytes([resp[base], resp[base + 1]]);
+            // Five X/Y pairs, each four little-endian bytes: X at 8 + 4*i,
+            // Y at 10 + 4*i. The launcher groups these ten u16 values into
+            // five DPI pairs before editing them.
+            for slot in 0..5 {
+                let base = 8 + 4 * slot;
+                info.dpi[slot] = u16::from_le_bytes([resp[base], resp[base + 1]]);
+                info.dpi[slot + 5] = u16::from_le_bytes([resp[base + 2], resp[base + 3]]);
             }
             info.level_count = u8::try_from(resp[6].count_ones()).unwrap_or(0);
             info.report_rate = decode_report_rate(resp[5]);
@@ -533,6 +538,25 @@ pub fn cmd_dpi_current(mode: WorkMode, level: u8) -> [u8; REPORT_LEN] {
         .finish(mode)
 }
 
+/// `[4, 0, 132, 4, rate]` — set the report-rate index.
+///
+/// The launcher uses the same type/opcode/sub-command as [`cmd_dpi_current`];
+/// the payload is the zero-based rate index stored as `index + 1` (0 for the
+/// default 125 Hz).
+#[must_use]
+pub fn cmd_report_rate(mode: WorkMode, index: u8) -> [u8; REPORT_LEN] {
+    Report::new(ty::SENSOR, 4, op::SENSOR_SET)
+        .byte(
+            4,
+            if index > 0 {
+                index.saturating_add(1)
+            } else {
+                0
+            },
+        )
+        .finish(mode)
+}
+
 /// `[4, 0, 132, 10, flags, lod, angle]` — LOD / motion flags / angle.
 #[must_use]
 pub fn cmd_lod(mode: WorkMode, sensor: SensorFlags, lod: u8, angle: i8) -> [u8; REPORT_LEN] {
@@ -603,9 +627,9 @@ pub fn cmd_recovery(mode: WorkMode, tag: u8, value: u8) -> [u8; REPORT_LEN] {
 mod tests {
     use super::{
         CHECKSUM_TARGET, Contract, Light, Power, REPORT_LEN, Report, SensorFlags, Version,
-        WorkMode, cmd_dpi_full, cmd_light_set, cmd_power, cmd_save, decode_report_rate,
-        encode_report_rate, level_mask, parse_base_info, parse_light, parse_power, parse_version,
-        ty,
+        WorkMode, cmd_dpi_full, cmd_light_set, cmd_power, cmd_report_rate, cmd_save,
+        decode_report_rate, encode_report_rate, level_mask, parse_base_info, parse_light,
+        parse_power, parse_version, ty,
     };
 
     fn sum(report: &[u8; REPORT_LEN]) -> u32 {
@@ -679,6 +703,15 @@ mod tests {
     }
 
     #[test]
+    fn report_rate_write_uses_the_short_form() {
+        let report = cmd_report_rate(WorkMode::Usb, 2);
+        assert_eq!(&report[..5], &[4, 0, 132, 4, 3]);
+        assert_eq!(sum(&report) % 256, u32::from(CHECKSUM_TARGET));
+        let default = cmd_report_rate(WorkMode::Usb, 0);
+        assert_eq!(&default[..5], &[4, 0, 132, 4, 0]);
+    }
+
+    #[test]
     fn report_rate_roundtrips_and_decodes_the_default_zero() {
         for index in 0..6 {
             assert_eq!(decode_report_rate(encode_report_rate(index)), index);
@@ -746,8 +779,8 @@ mod tests {
         resp[5] = 3;
         resp[6] = 0b1_1111;
         resp[7] = 1;
-        resp[8] = 0x90;
-        resp[9] = 0x01;
+        resp[8..12].copy_from_slice(&[0x90, 0x01, 0x2c, 0x01]); // X0=400, Y0=300
+        resp[12..16].copy_from_slice(&[0x20, 0x03, 0x20, 0x03]); // X1=800, Y1=800
         resp[43] = 2;
         resp[44] = 0xe2;
         resp[52] = 0x2c;
@@ -755,6 +788,9 @@ mod tests {
         resp[54] = 4;
         let info = parse_base_info(&resp, Contract::Dms);
         assert_eq!(info.dpi[0], 400);
+        assert_eq!(info.dpi[5], 300);
+        assert_eq!(info.dpi[1], 800);
+        assert_eq!(info.dpi[6], 800);
         assert_eq!(info.level_count, 5);
         assert_eq!(info.report_rate, 2);
         assert_eq!(info.current_dpi, 1);

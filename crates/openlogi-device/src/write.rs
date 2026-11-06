@@ -21,6 +21,7 @@ use crate::channel::route::{DeviceRoute, open_route_channel};
 
 mod backlight;
 mod button_spy;
+pub mod darmoshark;
 mod diagnostics;
 mod disable_keys;
 mod dpi;

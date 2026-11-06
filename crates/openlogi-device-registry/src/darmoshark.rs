@@ -16,6 +16,12 @@ pub const DARMOSHARK_VENDOR_ID: u16 = 0x1915;
 /// Stable driver-family identifier carried by standalone Darmoshark inventory.
 pub const DARMOSHARK_DRIVER_ID: &str = "darmoshark";
 
+/// Wired M3S Pro product id.
+pub const DARMOSHARK_WIRED_PRODUCT_ID: u16 = 0x073c;
+
+/// "1K NRF Receiver" (2.4 GHz dongle) product id.
+pub const DARMOSHARK_RECEIVER_PRODUCT_ID: u16 = 0x0723;
+
 /// HID usage page of the vendor configuration channel.
 pub const DARMOSHARK_CONFIG_USAGE_PAGE: u16 = 0xff0a;
 
@@ -60,8 +66,11 @@ impl DarmosharkDescriptor {
 /// one that reaches the mouse, so it is presented as the same product over
 /// 2.4 GHz rather than as a receiver card of its own.
 pub const DARMOSHARK_DEVICES: &[DarmosharkDescriptor] = &[
-    DarmosharkDescriptor::new(0x073c, "Darmoshark M3S Pro"),
-    DarmosharkDescriptor::new(0x0723, "Darmoshark M3S Pro (2.4 GHz)"),
+    DarmosharkDescriptor::new(DARMOSHARK_WIRED_PRODUCT_ID, "Darmoshark M3S Pro"),
+    DarmosharkDescriptor::new(
+        DARMOSHARK_RECEIVER_PRODUCT_ID,
+        "Darmoshark M3S Pro (2.4 GHz)",
+    ),
 ];
 
 /// Finds a Darmoshark descriptor by its complete raw-HID identity.
@@ -90,14 +99,18 @@ pub fn matches_darmoshark(vendor_id: u16, product_id: u16, usage_page: u16, usag
 mod tests {
     use super::{
         DARMOSHARK_CONFIG_USAGE_ID, DARMOSHARK_CONFIG_USAGE_PAGE, DARMOSHARK_DEVICES,
-        DARMOSHARK_VENDOR_ID, find_darmoshark, matches_darmoshark,
+        DARMOSHARK_RECEIVER_PRODUCT_ID, DARMOSHARK_VENDOR_ID, DARMOSHARK_WIRED_PRODUCT_ID,
+        find_darmoshark, matches_darmoshark,
     };
 
     #[test]
     fn both_transports_match_the_configuration_collection() {
         for (product_id, name) in [
-            (0x073c, "Darmoshark M3S Pro"),
-            (0x0723, "Darmoshark M3S Pro (2.4 GHz)"),
+            (DARMOSHARK_WIRED_PRODUCT_ID, "Darmoshark M3S Pro"),
+            (
+                DARMOSHARK_RECEIVER_PRODUCT_ID,
+                "Darmoshark M3S Pro (2.4 GHz)",
+            ),
         ] {
             let descriptor = find_darmoshark(
                 DARMOSHARK_VENDOR_ID,
@@ -114,13 +127,13 @@ mod tests {
     fn a_plain_hid_collection_is_not_the_configuration_channel() {
         assert!(!matches_darmoshark(
             DARMOSHARK_VENDOR_ID,
-            0x0723,
+            DARMOSHARK_RECEIVER_PRODUCT_ID,
             0x0001,
             0x0002
         ));
         assert!(!matches_darmoshark(
             DARMOSHARK_VENDOR_ID,
-            0x0723,
+            DARMOSHARK_RECEIVER_PRODUCT_ID,
             0x000c,
             0x0001
         ));
@@ -130,7 +143,7 @@ mod tests {
     fn another_vendor_is_never_claimed() {
         assert!(!matches_darmoshark(
             0x046d,
-            0x0723,
+            DARMOSHARK_RECEIVER_PRODUCT_ID,
             DARMOSHARK_CONFIG_USAGE_PAGE,
             DARMOSHARK_CONFIG_USAGE_ID
         ));
