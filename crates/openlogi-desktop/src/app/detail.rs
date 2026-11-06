@@ -124,9 +124,12 @@ pub(super) fn detail_content(
     cx: &mut Context<AppView>,
 ) -> impl IntoElement {
     let pal = theme::palette(cx);
-    let online = AppState::try_read(cx)
-        .and_then(AppState::current_record)
-        .is_some_and(|record| record.online);
+    let record = AppState::try_read(cx).and_then(AppState::current_record);
+    let online = record.is_some_and(|record| record.online);
+    // SmartShift is a HID++ feature. Standalone raw drivers (Darmoshark) have a
+    // `driver_id` and no HID++ channel, so the card would only ever show a
+    // failed-read state on the Pointer page.
+    let show_smartshift = record.is_some_and(|record| record.driver_id.is_none());
     let content = match active {
         DetailTab::Buttons => {
             buttons_tab(panels.mouse_model, profile_icons, app_catalog, cx).into_any_element()
@@ -141,6 +144,7 @@ pub(super) fn detail_content(
             panels.dpi_panel,
             panels.smartshift_panel,
             panels.momentum_panel,
+            show_smartshift,
             cx,
         )
         .into_any_element(),
@@ -415,6 +419,7 @@ fn pointer_tab(
     dpi_panel: &gpui::Entity<DpiPanel>,
     smartshift_panel: &gpui::Entity<SmartShiftPanel>,
     momentum_panel: &gpui::Entity<MomentumPanel>,
+    show_smartshift: bool,
     cx: &mut Context<AppView>,
 ) -> impl IntoElement {
     let pal = theme::palette(cx);
@@ -434,14 +439,16 @@ fn pointer_tab(
                 )
                 .fill(),
             ))
-            .child(pointer_grid_card(
-                PanelCard::new(
-                    tr!("pointer.smartshift"),
-                    Icon::empty().path("action-icons/refresh-cw.svg"),
-                    smartshift_panel.clone().into_any_element(),
+            .children(show_smartshift.then(|| {
+                pointer_grid_card(
+                    PanelCard::new(
+                        tr!("pointer.smartshift"),
+                        Icon::empty().path("action-icons/refresh-cw.svg"),
+                        smartshift_panel.clone().into_any_element(),
+                    )
+                    .fill(),
                 )
-                .fill(),
-            ))
+            }))
             .child(
                 div()
                     .min_w(POINTER_CARD_MIN_W)
