@@ -1,9 +1,10 @@
 # Darmoshark driver registration (experimental)
 
 This branch registers Darmoshark (MOJI) mice as **standalone raw-HID devices**
-so OpenLogi's inventory, GUI and CLI can see them. It is an experimental,
-identity-only integration: the protocol codec exists, but no configuration
-write path is wired to the agent yet.
+and, as of the P2 stage, drives their **DPI** and **report rate** through
+OpenLogi's existing pointer UI and JSON API. It is still an experimental,
+scope-expanding integration: battery, firmware, lighting, LOD, buttons,
+profiles and reconnect re-apply are not implemented.
 
 The target hardware is the Darmoshark M3S Pro (`1915:073c` wired) and its
 1K NRF Receiver (`1915:0723`). Both publish the vendor configuration channel
@@ -20,96 +21,99 @@ input/output report pair.
 The receiver is presented as the same product over 2.4 GHz rather than as a
 receiver card: its configuration collection is the one that reaches the mouse.
 
-The device appears as a `DeviceKind::Mouse` in the standalone inventory. Its
-`capabilities` are an explicitly measured **empty** set, not `None`:
+The device is a `DeviceKind::Mouse` with driver-advertised capabilities:
 
-- `None` would make clients fall back to `Capabilities::presumed_from_kind`,
-  which presumes HID++ button and pointer controls this device does not serve.
-- `Some(Capabilities::default())` says "measured: no configurable HID++
-  features". This follows the G600 precedent. On Linux and macOS the Pointer
-  tab may still appear because software scroll inversion is a host feature;
-  the DPI and report-rate capability flags are false, so neither control is
-  claimed. The DPI panel may show an unsupported/read-failure state until the
-  P2 write path exists.
+```rust
+Capabilities {
+    pointer: true,       // DPI read/write implemented by write/darmoshark.rs
+    report_rate: true,   // report-rate read/write implemented there
+    ..Capabilities::default()
+}
+```
+
+These are **driver capabilities, not HID++ feature bits**. Only implemented
+controls are advertised: buttons and lighting stay off. On Linux and macOS the
+Pointer tab therefore shows the DPI and report-rate controls (plus the
+host-side software scroll-inversion card).
 
 ## Code map
 
 | Path | Role |
 |---|---|
-| `crates/openlogi-device-registry/src/darmoshark.rs` | Pure identities: VID/PIDs, config usage page/usage, descriptor lookup, matching tests |
-| `crates/openlogi-device/src/darmoshark.rs` | Protocol codec: 64-byte frame, checksum, command builders, response parsers, encodings; no host I/O |
-| `crates/openlogi-device/src/inventory/standalone.rs` | Recognizes the config collection and builds the `StandaloneDevice` |
+| `crates/openlogi-device-registry/src/darmoshark.rs` | Pure identities: VID/PIDs, config usage page/usage, descriptor lookup |
+| `crates/openlogi-device/src/darmoshark.rs` | Protocol codec: 64-byte frame, checksum, command builders, `dms` response parsers |
+| `crates/openlogi-device/src/backend.rs` | `RawChannel`: raw request/response HID channel |
+| `crates/openlogi-hid/src/transport/native.rs` | `NativeRawChannel` over `async-hid` reader + writer |
+| `crates/openlogi-device/src/write/darmoshark.rs` | DPI / report-rate driver: handshake, retry, read-modify-write, save, read-back |
+| `crates/openlogi-agent-core/src/hardware/context.rs` | Raw driver entry points |
+| `crates/openlogi-agent-core/src/orchestrator.rs` | `SharedHandles` raw-route branches for DPI / report-rate reads and writes |
+| `crates/openlogi-agent/src/server.rs` | IPC `read_dpi` / `read_report_rate` use the shared raw-aware methods |
+| `crates/openlogi-device/src/inventory/standalone.rs` | Recognizes the config collection and advertises the two capabilities |
 
-No `Cargo.toml`, IPC, agent, desktop, core or backend changes are needed for
-this stage: `openlogi-device` already depends on the registry, and the HID++
-candidate filter is scoped to Logitech's vendor id, so the Darmoshark config
-node never enters the HID++ path.
+No IPC method, TOML schema or `PROTOCOL_VERSION` change is involved. The raw
+channel is an additive `HidBackend` capability; replay/scripted backends keep
+the default "unsupported" implementation.
 
-## Why this is identity-only
+## What works on hardware
 
-Making DPI, report rate or lighting actually work needs more than a registry
-entry:
+Verified on 2026-11-05 against `1915:0723` (firmware `0.1.1`, `dms` contract):
 
-1. **No raw read path.** `HidBackend` exposes `open_raw_writer` only. The
-   Darmoshark protocol is request/response, so the driver needs a raw channel
-   that reads 64-byte input reports (native, replay and scripted backends).
-2. **Existing IPC assumes HID++.** `read_dpi`/`set_dpi`,
-   `read_report_rate`/`set_report_rate` and the lighting methods resolve a
-   route to a HID++ channel. A raw device would have to be dispatched to a
-   Darmoshark driver on the same route.
-3. **Capability semantics.** `Capabilities` is a HID++ feature-table DTO used
-   for UI gating. A raw driver needs either a documented extension of that
-   meaning or a separate driver-capability descriptor.
-4. **Battery and firmware.** `StandaloneDevice` has no battery or model-info
-   fields. Adding them crosses the append-only GUI↔agent bincode wire format
-   and requires a `PROTOCOL_VERSION` bump.
+- `read_dpi`: current **1000**, supported **50..30000 step 50**.
+- `set_dpi(800)`: read-back **800**; restored to **1000**.
+- `read_report_rate`: current **500 Hz**, supported **125 / 500 / 1000 / 2000**.
+- `set_report_rate(1000)`: read-back **1000 Hz**; restored to **500**.
+- The device's five DPI levels are `dms` **X/Y pairs** at bytes 8..28; the
+  active index is the zero-based `resp[7]`. A report-rate write is the short
+  `[4, 0, 132, 4, level+1]` command, not the full sensor block.
 
-Until those land, claiming `pointer`/`report_rate`/`lighting` capabilities
-would render panels that cannot read or write the device — worse than an
-identity-only card.
+The agent stores nothing for this device because its raw route has no serial
+and therefore a transient `id:…` identity. A successful GUI/API write is
+applied live, but `config.toml` persistence and reconnect re-apply are P3.
 
-## Mapping summary
+## Current limits
 
-The full inventory and one-to-one mapping is maintained alongside the
-Darmoshark driver repository (`docs/OPENLOGI-FEATURE-MAP.md`). In short:
-
-| Darmoshark feature | OpenLogi surface | Status |
-|---|---|---|
-| Identity, device card, alias | standalone inventory | this branch |
-| Battery / charging | `StandaloneDevice` + inventory read | phase 3 |
-| Firmware / device info | `StandaloneDevice` + model info | phase 3 |
-| Current DPI read/write | existing DPI IPC | phase 2 |
-| Report rate | existing report-rate IPC | phase 2 |
-| LOD / angle | no OpenLogi panel | phase 3 |
-| Static / breathing / color-cycle lighting | keyboard RGB panel is HID++-specific | phase 3 |
-| Button remapping | HID++ ReprogControls / gaming tables | partial; raw action table unknown |
-| Onboard profile switch | no device-profile IPC | phase 4 |
-| SmartShift, thumbwheel, haptics, Easy-Switch | — | not applicable |
+1. **No persistence / reconnect re-apply** — transient identity, by design of
+   `PhysicalDeviceKey`.
+2. **No battery or firmware** — `StandaloneDevice` has no such fields; adding
+   them crosses the append-only GUI↔agent bincode format and needs a
+   `PROTOCOL_VERSION` bump.
+3. **No lighting** — the device reports `mode=0`, which the current
+   static/breathing/color-cycle mapping does not cover.
+4. **No LOD, angle, buttons, profiles or macros** — the protocol is known,
+   but OpenLogi has no matching panel/IPC; these remain P3/P4.
+5. **Five DPI levels only** — six-to-ten-level models use the extended `0xBC`
+   sensor command, which this driver does not implement.
+6. **No recording/replay raw channel** — the native backend rejects raw
+   request/response recording for now.
 
 ## Verification
 
 ```sh
 cargo fmt --all -- --check
-cargo test -p openlogi-device-registry darmoshark
 cargo test -p openlogi-device darmoshark
 cargo test -p openlogi-device standalone
+cargo test -p openlogi-device-registry darmoshark
 cargo clippy -p openlogi-device-registry -p openlogi-device --all-targets -- -D warnings
-cargo run -p openlogi -- list
 ```
 
-With the wireless receiver attached, `openlogi list` should include a
-Darmoshark mouse record named `Darmoshark M3S Pro (2.4 GHz)`. Verified on
-2026-11-05 with a minimal harness calling
-`openlogi_hid::enumerate_standalone()`: it returned exactly one record with
-`kind=Mouse`, `driver=darmoshark`, `vid=1915 pid=0723 usage=ff0a:0001`, online,
-and the measured empty capability set. No write path was exercised, and no
-device permission is required for enumeration.
+A minimal real-device probe calling the same functions printed:
+
+```text
+read_dpi: current=1000 supported=50..30000 step=50
+read_rate: current=500 supported=[125, 500, 1000, 2000]
+set_dpi(800): readback=800
+restore_dpi(1000): readback=1000
+set_rate(1000): readback=1000
+restore_rate(500): readback=500
+```
+
+`openlogi list` still consumes the standalone inventory; the device appears as
+`Darmoshark M3S Pro (2.4 GHz)`. Full GUI/agent packaging was not built here.
 
 ## Scope and risk
 
 OpenLogi is a Logitech HID++ companion. Registering a non-Logitech vendor is a
-product-scope expansion, not a neutral driver addition. This branch is a
-proof of concept meant to answer whether the standalone-driver seam is usable
-for the Darmoshark protocol; it is not a claim that upstream will accept the
-device family. The codec and identity modules are isolated so the experiment
-can be dropped without touching the HID++ layer.
+product-scope expansion, not a neutral driver addition. This branch is a proof
+of concept for the standalone-driver seam; it is not a claim that upstream will
+accept the device family. The codec, raw channel and driver are isolated so the
+experiment can be dropped without touching the HID++ feature layer.

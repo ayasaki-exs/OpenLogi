@@ -1,10 +1,11 @@
 # Darmoshark 驱动注册（实验性）
 
-本分支把 Darmoshark（MOJI）鼠标注册为 **standalone raw-HID 设备**，让
-OpenLogi 的 inventory、GUI 和 CLI 能够看到它。这是实验性的“仅身份”接入：
-协议 codec 已就位，但还没有把配置写入路径接到 agent。
+本分支把 Darmoshark（MOJI）鼠标注册为 **standalone raw-HID 设备**，并在 P2
+阶段把 **DPI** 和 **回报率** 接到 OpenLogi 现有的指针 UI 与 JSON API。它仍是
+实验性、扩大产品范围的接入：电量、固件、灯效、LOD、按键、profile 和重连 reapply
+都尚未实现。
 
-目标硬件是 Darmoshark M3S Pro（`1915:073c`，有线）和它的 1K NRF Receiver
+目标硬件是 Darmoshark M3S Pro（`1915:073c` 有线）和它的 1K NRF Receiver
 （`1915:0723`）。两者都在 usage page `0xff0a`、usage `0x0001` 上暴露厂商配置
 通道，使用 64 字节、无 report id 的输入/输出报文。
 
@@ -18,85 +19,93 @@ OpenLogi 的 inventory、GUI 和 CLI 能够看到它。这是实验性的“仅�
 接收器被表示为同一产品的 2.4 GHz 形态，而不是一张独立的接收器卡片：它的配置
 集合才是真正能到达鼠标的那一个。
 
-设备在 standalone inventory 中以 `DeviceKind::Mouse` 出现。它的 `capabilities`
-是**显式测量的空集合**，而不是 `None`：
+设备在 standalone inventory 中是一个 `DeviceKind::Mouse`，并声明：
 
-- `None` 会让客户端回退到 `Capabilities::presumed_from_kind`，从而假定该设备
-  拥有它并不提供的 HID++ 按键和指针控制。
-- `Some(Capabilities::default())` 表示“已测量：没有可配置的 HID++ 功能”。这与
-  G600 的先例一致。Linux 和 macOS 上仍可能显示 Pointer 标签页，因为软件滚轮反转
-  是主机侧功能；DPI 和回报率的能力位为 false，因此不会声称提供这两项控制。在
-  P2 写入路径完成前，DPI 面板可能显示“不支持/读取失败”状态。
+```rust
+Capabilities {
+    pointer: true,       // DPI 读写由 write/darmoshark.rs 实现
+    report_rate: true,   // 回报率读写同样在那里实现
+    ..Capabilities::default()
+}
+```
+
+这是**驱动能力声明，不是 HID++ feature bit**。只声明已经实现的控件：buttons
+和 lighting 仍为 false。Linux/macOS 上 Pointer 标签页因此会出现 DPI 与回报率
+控件（以及主机侧软件滚轮反转卡片）。
 
 ## 代码地图
 
 | 路径 | 作用 |
 |---|---|
-| `crates/openlogi-device-registry/src/darmoshark.rs` | 纯身份：VID/PID、config usage page/usage、描述符查找与匹配测试 |
-| `crates/openlogi-device/src/darmoshark.rs` | 协议 codec：64 字节帧、checksum、命令构造、响应解析、编码表；不做主机 I/O |
-| `crates/openlogi-device/src/inventory/standalone.rs` | 识别 config 集合并构造 `StandaloneDevice` |
+| `crates/openlogi-device-registry/src/darmoshark.rs` | 纯身份：VID/PID、config usage、描述符查找 |
+| `crates/openlogi-device/src/darmoshark.rs` | 协议 codec：64 字节帧、checksum、命令构造、`dms` 响应解析 |
+| `crates/openlogi-device/src/backend.rs` | `RawChannel`：raw 请求/响应 HID 通道 |
+| `crates/openlogi-hid/src/transport/native.rs` | 基于 `async-hid` reader + writer 的 `NativeRawChannel` |
+| `crates/openlogi-device/src/write/darmoshark.rs` | DPI / 回报率驱动：握手、重试、读改写、save、回读 |
+| `crates/openlogi-agent-core/src/hardware/context.rs` | raw 驱动入口 |
+| `crates/openlogi-agent-core/src/orchestrator.rs` | `SharedHandles` 中 DPI / 回报率的 raw-route 分支 |
+| `crates/openlogi-agent/src/server.rs` | IPC `read_dpi` / `read_report_rate` 走 shared 方法 |
+| `crates/openlogi-device/src/inventory/standalone.rs` | 识别 config 集合并声明两项能力 |
 
-这一阶段不需要改 `Cargo.toml`、IPC、agent、desktop、core 或 backend：
-`openlogi-device` 已经依赖 registry，而 HID++ 候选过滤只接受 Logitech 的
-vendor id，所以 Darmoshark 的 config 节点不会误入 HID++ 路径。
+不涉及 IPC 方法、TOML schema 或 `PROTOCOL_VERSION` 变更。raw channel 是
+`HidBackend` 的增量能力；replay/scripted backend 保留默认的“不支持”实现。
 
-## 为什么只做身份
+## 真机上已经可用
 
-要让 DPI、回报率或灯效真正工作，需要的远不止一条 registry 记录：
+2026-11-05 对 `1915:0723`（固件 `0.1.1`、`dms` contract）验证：
 
-1. **没有 raw 读通道。** `HidBackend` 只有 `open_raw_writer`。Darmoshark 协议是
-   请求/响应式的，驱动需要能读取 64 字节输入报文的 raw channel（native、
-   replay 和 scripted backend 都要实现）。
-2. **现有 IPC 假定 HID++。** `read_dpi`/`set_dpi`、`read_report_rate`/
-   `set_report_rate` 以及灯效方法都会把 route 解析成 HID++ channel。raw 设备
-   需要在同一 route 上分发到 Darmoshark 驱动。
-3. **能力语义。** `Capabilities` 是 HID++ feature table 的 DTO，被 UI 用来决定
-   面板显示。raw 驱动要么明确扩展这个语义，要么新增独立的驱动能力描述符。
-4. **电量与固件。** `StandaloneDevice` 没有 battery/model-info 字段。新增字段会
-   穿过 GUI↔agent 的 append-only bincode wire format，必须 bump
-   `PROTOCOL_VERSION`。
+- `read_dpi`：current **1000**，supported **50..30000 step 50**。
+- `set_dpi(800)`：回读 **800**；恢复为 **1000**。
+- `read_report_rate`：current **500 Hz**，supported **125 / 500 / 1000 / 2000**。
+- `set_report_rate(1000)`：回读 **1000 Hz**；恢复为 **500**。
+- 设备的五档 DPI 是字节 8..28 的 `dms` **X/Y 对**；当前档位是零基
+  `resp[7]`。回报率写入是短命令 `[4, 0, 132, 4, level+1]`，不是完整 sensor
+  block。
 
-在这些完成之前，声称 `pointer`/`report_rate`/`lighting` 能力只会渲染出无法读写
-设备的面板，比一张仅身份的设备卡片更糟。
+该设备没有序列号，raw route 身份是瞬态 `id:…`，所以 agent 不保存配置：
+GUI/API 写入会立即生效，但 `config.toml` 持久化和重连 reapply 属于 P3。
 
-## 映射摘要
+## 当前限制
 
-完整的功能清单与一一映射维护在 Darmoshark 驱动仓库的
-`docs/OPENLOGI-FEATURE-MAP.md`。简表：
-
-| Darmoshark 功能 | OpenLogi 界面 | 状态 |
-|---|---|---|
-| 身份、设备卡片、别名 | standalone inventory | 本分支 |
-| 电量/充电 | `StandaloneDevice` + inventory 读取 | P3 |
-| 固件/设备信息 | `StandaloneDevice` + model info | P3 |
-| 当前 DPI 读写 | 现有 DPI IPC | P2 |
-| 回报率 | 现有 report-rate IPC | P2 |
-| LOD/角度 | OpenLogi 无面板 | P3 |
-| 静态/呼吸/循环灯效 | 键盘 RGB 面板是 HID++ 专用 | P3 |
-| 按键重映射 | HID++ ReprogControls / gaming tables | 部分；raw action 表未知 |
-| 板载 profile 切换 | 无设备 profile IPC | P4 |
-| SmartShift、拇指轮、触觉、Easy-Switch | — | 不适用 |
+1. **无持久化 / 重连 reapply** —— 瞬态身份，`PhysicalDeviceKey` 的既有设计。
+2. **无电量/固件** —— `StandaloneDevice` 没有这些字段；新增字段会穿过
+   append-only 的 GUI↔agent bincode 格式，需要 bump `PROTOCOL_VERSION`。
+3. **无灯效** —— 设备返回 `mode=0`，现有 static/breathing/color-cycle 映射
+   不覆盖它。
+4. **无 LOD、angle、按键、profile、宏** —— 协议已知，但 OpenLogi 没有对应
+   面板/IPC，属于 P3/P4。
+5. **仅支持五档 DPI** —— 6–10 档机型使用扩展 `0xBC` sensor 命令，本驱动
+   未实现。
+6. **无 raw channel 录制/replay** —— native backend 暂时拒绝 raw 请求/响应
+   录制。
 
 ## 验证
 
 ```sh
 cargo fmt --all -- --check
-cargo test -p openlogi-device-registry darmoshark
 cargo test -p openlogi-device darmoshark
 cargo test -p openlogi-device standalone
+cargo test -p openlogi-device-registry darmoshark
 cargo clippy -p openlogi-device-registry -p openlogi-device --all-targets -- -D warnings
-cargo run -p openlogi -- list
 ```
 
-插入无线接收器后，`openlogi list` 应包含名为
-`Darmoshark M3S Pro (2.4 GHz)` 的设备记录。2026-11-05 已用一个调用
-`openlogi_hid::enumerate_standalone()` 的最小测试程序验证：它只返回一条记录，
-`kind=Mouse`、`driver=darmoshark`、`vid=1915 pid=0723 usage=ff0a:0001`、
-online，并且能力集合是测量到的空集。不会执行任何写入，枚举也不需要设备权限。
+一个调用相同驱动函数的最小真机 probe 输出：
+
+```text
+read_dpi: current=1000 supported=50..30000 step=50
+read_rate: current=500 supported=[125, 500, 1000, 2000]
+set_dpi(800): readback=800
+restore_dpi(1000): readback=1000
+set_rate(1000): readback=1000
+restore_rate(500): readback=500
+```
+
+`openlogi list` 仍使用同一份 standalone inventory，设备会显示为
+`Darmoshark M3S Pro (2.4 GHz)`。本次没有构建完整 GUI/agent 安装包。
 
 ## 范围与风险
 
-OpenLogi 是 Logitech HID++ 的伴侣应用。注册非 Logitech 厂商属于产品范围
-扩展，而不是中性的驱动新增。本分支是用于验证“standalone 驱动接缝能否承载
-Darmoshark 协议”的 PoC，不代表上游会接受该设备族。codec 与身份模块彼此隔离，
-因此这个实验可以整体丢弃而不触碰 HID++ 层。
+OpenLogi 是 Logitech HID++ 的伴侣应用。注册非 Logitech 厂商属于产品范围扩展，
+不是中性的驱动新增。本分支是 standalone 驱动接缝的 PoC，不代表上游会接受该
+设备族。codec、raw channel 和驱动彼此隔离，因此这个实验可以整体丢弃而不触碰
+HID++ feature 层。
