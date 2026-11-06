@@ -230,12 +230,7 @@ impl Agent for AgentServer {
     }
 
     async fn read_dpi(self, _: Context, route: DeviceRoute) -> Result<DpiInfo, WriteError> {
-        self.shared
-            .device(&route)
-            .run(HidppOperation::ReadDpiCapabilities, |c| async move {
-                openlogi_hid::get_dpi_info_on(&c).await
-            })
-            .await
+        self.shared.dpi_info(&route).await
     }
 
     async fn read_smartshift(
@@ -353,12 +348,7 @@ impl Agent for AgentServer {
         _: Context,
         route: DeviceRoute,
     ) -> Result<ReportRateInfo, WriteError> {
-        self.shared
-            .device(&route)
-            .run(HidppOperation::ReadReportRate, |c| async move {
-                openlogi_hid::get_report_rate_info_on(&c).await
-            })
-            .await
+        self.shared.report_rate_info(&route).await
     }
     async fn set_report_rate(
         self,

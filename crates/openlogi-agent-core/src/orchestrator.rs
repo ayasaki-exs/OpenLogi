@@ -30,7 +30,7 @@ use openlogi_core::device::{
 use openlogi_core::device_order::{DeviceIdentity, DeviceStableId, PhysicalDeviceKey};
 use openlogi_hid::{
     BacklightChange, BacklightState, CaptureChannelSlot, ChannelPool, ChannelRegistry,
-    DeviceIoGate, DeviceRoute, DisableKeysMask, Dpi, EasySwitchHosts, FnLockState,
+    DeviceIoGate, DeviceRoute, DisableKeysMask, Dpi, DpiInfo, EasySwitchHosts, FnLockState,
     ForceSensingInfo, GamingWanted, HidppOperation, HostOs, PointerSpeed, ReportRate,
     ReportRateInfo, SidetoneLevel, WriteError, commands_for_light_settings,
     is_reserved_keyboard_control, key_display_for,
@@ -293,6 +293,12 @@ impl SharedHandles {
         route: &DeviceRoute,
         rate: ReportRate,
     ) -> Result<ReportRateInfo, WriteError> {
+        if openlogi_hid::write::darmoshark::is_route(route) {
+            return self
+                .hardware()
+                .darmoshark_set_report_rate(route, rate)
+                .await;
+        }
         let ticket = self.report_rate_order.request(route);
         self.device(route)
             .run_in_turn(
@@ -301,6 +307,36 @@ impl SharedHandles {
                 |c| async move { openlogi_hid::set_report_rate_on(&c, rate).await },
                 |c| async move { openlogi_hid::get_report_rate_info_on(&c).await },
             )
+            .await
+    }
+
+    /// Read the DPI and supported values of the device at `route`.
+    ///
+    /// A Darmoshark raw device is served by its own driver; a HID++ device
+    /// keeps the existing channel path.
+    pub async fn dpi_info(&self, route: &DeviceRoute) -> Result<DpiInfo, WriteError> {
+        if openlogi_hid::write::darmoshark::is_route(route) {
+            return self.hardware().darmoshark_dpi_info(route).await;
+        }
+        self.device(route)
+            .run(HidppOperation::ReadDpiCapabilities, |c| async move {
+                openlogi_hid::get_dpi_info_on(&c).await
+            })
+            .await
+    }
+
+    /// Read the report rate and supported rates of the device at `route`.
+    pub async fn report_rate_info(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<ReportRateInfo, WriteError> {
+        if openlogi_hid::write::darmoshark::is_route(route) {
+            return self.hardware().darmoshark_report_rate_info(route).await;
+        }
+        self.device(route)
+            .run(HidppOperation::ReadReportRate, |c| async move {
+                openlogi_hid::get_report_rate_info_on(&c).await
+            })
             .await
     }
 
@@ -392,6 +428,17 @@ impl SharedHandles {
     /// the reconnect reapply. A write superseded before its turn writes
     /// nothing.
     pub async fn set_dpi(&self, route: &DeviceRoute, dpi: Dpi) -> Result<(), WriteError> {
+        if openlogi_hid::write::darmoshark::is_route(route) {
+            let result = self.hardware().darmoshark_set_dpi(route, dpi).await;
+            if let Ok(mut cycles) = self.dpi_cycle.write() {
+                if result.is_ok() {
+                    cycles.reapplied_at(route, dpi);
+                } else {
+                    cycles.rejected_at(route, dpi);
+                }
+            }
+            return result;
+        }
         let AppWrite { ticket, restore } = self
             .pointer_speeds
             .app_write(route, SavedSpeed::Dpi(Some(dpi)));

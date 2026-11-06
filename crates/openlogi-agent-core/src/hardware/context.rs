@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use openlogi_core::device::{LightState, StandaloneDevice};
-use openlogi_core::hid::{LightCommand, PairingError, WriteError};
+use openlogi_core::hid::{
+    Dpi, DpiInfo, LightCommand, PairingError, ReportRate, ReportRateInfo, WriteError,
+};
 use openlogi_hid::backend::{HidBackend, HotplugStream};
 use openlogi_hid::inventory::persist::ProbeCacheStore;
 use openlogi_hid::pairing::ReceiverIdentityCache;
@@ -66,6 +68,40 @@ impl HardwareContext {
     #[must_use]
     pub fn channel_pool(&self) -> ChannelPool {
         self.channel_pool.clone()
+    }
+
+    /// Read the DPI of the Darmoshark device `route` reaches.
+    pub(crate) async fn darmoshark_dpi_info(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<DpiInfo, WriteError> {
+        openlogi_hid::write::darmoshark::read_dpi(&*self.backend, route).await
+    }
+
+    /// Write `dpi` to the Darmoshark device `route` reaches.
+    pub(crate) async fn darmoshark_set_dpi(
+        &self,
+        route: &DeviceRoute,
+        dpi: Dpi,
+    ) -> Result<(), WriteError> {
+        openlogi_hid::write::darmoshark::set_dpi(&*self.backend, route, dpi).await
+    }
+
+    /// Read the report rate of the Darmoshark device `route` reaches.
+    pub(crate) async fn darmoshark_report_rate_info(
+        &self,
+        route: &DeviceRoute,
+    ) -> Result<ReportRateInfo, WriteError> {
+        openlogi_hid::write::darmoshark::read_report_rate(&*self.backend, route).await
+    }
+
+    /// Write `rate` to the Darmoshark device `route` reaches.
+    pub(crate) async fn darmoshark_set_report_rate(
+        &self,
+        route: &DeviceRoute,
+        rate: ReportRate,
+    ) -> Result<ReportRateInfo, WriteError> {
+        openlogi_hid::write::darmoshark::set_report_rate(&*self.backend, route, rate).await
     }
 
     /// Apply one explicit semantic command to a standalone light through this
