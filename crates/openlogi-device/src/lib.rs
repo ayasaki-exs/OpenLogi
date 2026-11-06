@@ -33,7 +33,7 @@ pub mod thumbwheel;
 pub mod write;
 
 pub use backend::{
-    BackendError, HidBackend, HotplugEvent, HotplugStream, NodeId, NodeInfo, RawWriter,
+    BackendError, HidBackend, HotplugEvent, HotplugStream, NodeId, NodeInfo, RawChannel, RawWriter,
 };
 pub use backlight::{
     BacklightChange, BacklightControls, BacklightDuration, BacklightMode, BacklightState,

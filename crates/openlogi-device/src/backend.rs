@@ -15,6 +15,7 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures_lite::Stream;
 use hidpp::async_trait;
@@ -148,6 +149,37 @@ pub trait RawWriter: Send + Sync {
     async fn write_output_report(&mut self, report: &[u8]) -> Result<(), BackendError>;
 }
 
+/// A raw HID channel that can both write and read reports.
+///
+/// [`RawWriter`] is enough for a write-only vendor protocol such as Litra's.
+/// A request/response protocol — Darmoshark's 64-byte vendor collection, for
+/// example — also needs the input side, and the HID++ channel cannot carry it.
+// Not `expect`: the lint is raised inside `async_trait`'s expansion, which rustc
+// does not credit to an expectation. Clippy 1.99 flags the `#[must_use]` the
+// macro puts on each boxed future; rust-clippy#17547 (1.100) stops linting
+// macro-generated code.
+#[expect(clippy::allow_attributes, reason = "see above")]
+#[allow(
+    clippy::double_must_use,
+    reason = "raised on `async_trait`'s generated methods, not on this source"
+)]
+#[async_trait]
+pub trait RawChannel: Send + Sync {
+    /// Write one output report, report id included as the first byte.
+    async fn write_output_report(&mut self, report: &[u8]) -> Result<(), BackendError>;
+
+    /// Read one input report, waiting at most `timeout`.
+    ///
+    /// Returns `Ok(None)` when no report arrived in time and the number of
+    /// bytes read otherwise. A backend reports a disconnected device as
+    /// [`BackendError::Disconnected`] rather than a timeout.
+    async fn read_input_report(
+        &mut self,
+        buffer: &mut [u8],
+        timeout: Duration,
+    ) -> Result<Option<usize>, BackendError>;
+}
+
 /// The HID stack beneath OpenLogi's HID++ layer.
 ///
 /// One implementation per host HID API. Everything above it — enumeration
@@ -190,6 +222,19 @@ pub trait HidBackend: Send + Sync {
 
     /// Open `node` for raw output reports.
     async fn open_raw_writer(&self, node: &NodeInfo) -> Result<Box<dyn RawWriter>, BackendError>;
+
+    /// Open `node` for raw request/response reports.
+    ///
+    /// Backends that cannot read raw input reports keep the default and report
+    /// the capability as unsupported instead of handing back a write-only sink.
+    async fn open_raw_channel(
+        &self,
+        _node: &NodeInfo,
+    ) -> Result<Box<dyn RawChannel>, BackendError> {
+        Err(BackendError::Backend(
+            "this HID backend does not support raw request/response channels".to_owned(),
+        ))
+    }
 
     /// Subscribe to node connect/disconnect events.
     fn watch(&self) -> Result<HotplugStream, BackendError>;

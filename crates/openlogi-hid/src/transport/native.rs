@@ -6,14 +6,15 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::time::Duration;
 
-use async_hid::{AsyncHidWrite as _, Device, DeviceWriter};
+use async_hid::{AsyncHidRead as _, AsyncHidWrite as _, Device, DeviceReader, DeviceWriter};
 use hidpp::async_trait;
 use hidpp::channel::HidppChannel;
 
 use openlogi_device::DeviceIoGate;
 use openlogi_device::backend::{
-    BackendError, HidBackend, HotplugStream, NodeId, NodeInfo, RawWriter,
+    BackendError, HidBackend, HotplugStream, NodeId, NodeInfo, RawChannel, RawWriter,
 };
 
 use crate::recording::{
@@ -155,6 +156,24 @@ impl NativeBackend {
             device_io: self.device_io.clone(),
         })
     }
+
+    async fn open_native_raw_channel(
+        &self,
+        node: &NodeInfo,
+    ) -> Result<NativeRawChannel, BackendError> {
+        self.device_io.ensure_allowed()?;
+        let (reader, writer) = self
+            .handle(node)?
+            .open()
+            .await
+            .map_err(super::backend_error)?;
+        self.device_io.ensure_allowed()?;
+        Ok(NativeRawChannel {
+            reader,
+            writer,
+            device_io: self.device_io.clone(),
+        })
+    }
 }
 
 #[async_trait]
@@ -231,6 +250,15 @@ impl HidBackend for NativeBackend {
         }
     }
 
+    async fn open_raw_channel(&self, node: &NodeInfo) -> Result<Box<dyn RawChannel>, BackendError> {
+        if self.recording.is_some() {
+            return Err(BackendError::Backend(
+                "raw request/response recording is not implemented yet".to_owned(),
+            ));
+        }
+        Ok(Box::new(self.open_native_raw_channel(node).await?))
+    }
+
     fn watch(&self) -> Result<HotplugStream, BackendError> {
         Ok(Box::new(watch_nodes()?))
     }
@@ -238,6 +266,13 @@ impl HidBackend for NativeBackend {
 
 /// [`RawWriter`] over an `async-hid` output-report writer.
 struct NativeRawWriter {
+    writer: DeviceWriter,
+    device_io: DeviceIoGate,
+}
+
+/// [`RawChannel`] over `async-hid`'s input reader and output writer.
+struct NativeRawChannel {
+    reader: DeviceReader,
     writer: DeviceWriter,
     device_io: DeviceIoGate,
 }
@@ -250,6 +285,32 @@ impl RawWriter for NativeRawWriter {
             .write_output_report(report)
             .await
             .map_err(super::backend_error)
+    }
+}
+
+#[async_trait]
+impl RawChannel for NativeRawChannel {
+    async fn write_output_report(&mut self, report: &[u8]) -> Result<(), BackendError> {
+        self.device_io.ensure_allowed()?;
+        self.writer
+            .write_output_report(report)
+            .await
+            .map_err(super::backend_error)
+    }
+
+    async fn read_input_report(
+        &mut self,
+        buffer: &mut [u8],
+        timeout: Duration,
+    ) -> Result<Option<usize>, BackendError> {
+        self.device_io.ensure_allowed()?;
+        let result = tokio::time::timeout(timeout, self.reader.read_input_report(buffer)).await;
+        self.device_io.ensure_allowed()?;
+        match result {
+            Ok(Ok(read)) => Ok(Some(read)),
+            Ok(Err(error)) => Err(super::backend_error(error)),
+            Err(_elapsed) => Ok(None),
+        }
     }
 }
 
