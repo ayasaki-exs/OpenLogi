@@ -42,6 +42,8 @@ fn light_write_failure_reaches_the_gui_state() {
         }),
         driver_id: "litra".into(),
         registry_model_id: Some("8c900".into()),
+        battery: None,
+        firmware: None,
     };
     let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     let mut state = AppState::new(Sources {
@@ -212,6 +214,8 @@ fn transient_light_state_is_kept_in_memory_and_only_supported_commands_are_sent(
         }),
         driver_id: "test-light".into(),
         registry_model_id: None,
+        battery: None,
+        firmware: None,
     };
     let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     let mut state = AppState::new(Sources {

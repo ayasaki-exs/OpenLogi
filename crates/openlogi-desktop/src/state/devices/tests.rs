@@ -1,6 +1,7 @@
 use openlogi_core::config::{Config, DeviceConfig, LinkConfig};
 use openlogi_core::device::{
-    DeviceInventory, PairedDevice, RawDeviceAddress, ReceiverInfo, StandaloneDevice,
+    BatteryInfo, BatteryLevel, BatteryStatus, DeviceInventory, PairedDevice, RawDeviceAddress,
+    ReceiverInfo, StandaloneDevice,
 };
 
 use crate::services::assets::AssetResolver;
@@ -227,6 +228,7 @@ fn online_record(key: &str) -> DeviceRecord {
         slot: 1,
         online: true,
         battery: None,
+        firmware: None,
         settings_revision: 0,
         stale_pairings: Vec::new(),
     }
@@ -399,6 +401,8 @@ fn standalone_registry_identity_is_preserved_without_hidpp_model_info() {
         light_capabilities: None,
         driver_id: "litra".into(),
         registry_model_id: Some("8c901".into()),
+        battery: None,
+        firmware: None,
     };
     let list = build_device_list(
         &[],
@@ -416,6 +420,52 @@ fn standalone_registry_identity_is_preserved_without_hidpp_model_info() {
     // key, transport-free — not the route-embedded `raw:…` runtime key.
     assert_eq!(list[0].config_key, "serial:beam-1");
     assert!(list[0].asset.is_none());
+}
+
+#[test]
+fn standalone_battery_and_firmware_reach_the_gui_record() {
+    let mut device = StandaloneDevice {
+        address: RawDeviceAddress {
+            vendor_id: 0x1915,
+            product_id: 0x0723,
+            usage_page: 0xff0a,
+            usage_id: 0x0001,
+            identity: "id:darmoshark".into(),
+        },
+        display_name: "Darmoshark M3S Pro (2.4 GHz)".into(),
+        manufacturer: Some("Darmoshark".into()),
+        serial_number: None,
+        unit_id: [0; 4],
+        kind: DeviceKind::Mouse,
+        online: true,
+        capabilities: None,
+        light_capabilities: None,
+        driver_id: "darmoshark".into(),
+        registry_model_id: None,
+        battery: None,
+        firmware: None,
+    };
+    device.battery = Some(BatteryInfo {
+        percentage: Some(81),
+        level: BatteryLevel::Good,
+        status: BatteryStatus::Unknown,
+    });
+    device.firmware = Some("0.8.1".into());
+
+    let list = build_device_list(
+        &[],
+        std::slice::from_ref(&device),
+        &AssetResolver::new(),
+        &Config::default(),
+        &[],
+    );
+
+    assert_eq!(list.len(), 1);
+    assert_eq!(
+        list[0].battery.as_ref().and_then(|b| b.percentage),
+        Some(81)
+    );
+    assert_eq!(list[0].firmware.as_deref(), Some("0.8.1"));
 }
 
 #[test]

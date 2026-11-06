@@ -311,6 +311,7 @@ mod tests {
                 slot: 1,
                 online: true,
                 battery: None,
+                firmware: None,
                 settings_revision: 0,
                 stale_pairings: Vec::new(),
             };
