@@ -13,6 +13,7 @@
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use openlogi_core::device::{BatteryInfo, BatteryLevel, BatteryStatus};
 use openlogi_core::hid::{
     Dpi, DpiCapabilities, DpiInfo, HidppOperation, ReportRate, ReportRateInfo, WriteError,
 };
@@ -24,7 +25,8 @@ use crate::backend::{HidBackend, RawChannel};
 use crate::channel::route::{DeviceRoute, find_raw_route_node};
 use crate::darmoshark::{
     BaseInfo, Contract, Power, REPORT_LEN, REPORT_RATES, WorkMode, cmd_base_info, cmd_dpi_full,
-    cmd_power, cmd_report_rate, cmd_save, parse_base_info, parse_power, ty,
+    cmd_power, cmd_report_rate, cmd_save, cmd_version, parse_base_info, parse_power, parse_version,
+    ty,
 };
 
 const READ_TIMEOUT: Duration = Duration::from_millis(1500);
@@ -68,10 +70,21 @@ fn work_mode(route: &DeviceRoute) -> Option<WorkMode> {
     })
 }
 
+/// Battery and firmware values a raw driver can report without touching the
+/// writable sensor block.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeviceStatus {
+    /// Last power response, when the device answered.
+    pub battery: Option<BatteryInfo>,
+    /// Firmware version string, when the device answered.
+    pub firmware: Option<String>,
+}
+
 struct Session {
     channel: Box<dyn RawChannel>,
     mode: WorkMode,
     contract: Contract,
+    handshake: [u8; REPORT_LEN],
 }
 
 impl Session {
@@ -93,6 +106,7 @@ impl Session {
             channel,
             mode,
             contract: Contract::detect(&handshake),
+            handshake,
         })
     }
 
@@ -186,6 +200,28 @@ fn level_count(base: &BaseInfo) -> Result<u8, WriteError> {
         return Err(WriteError::EmptyDpiList);
     }
     Ok(base.level_count)
+}
+
+/// Converts the protocol power response into the UI battery DTO.
+///
+/// The protocol's `state` byte is not mapped yet (the development manual marks
+/// it unknown), so the charging status is deliberately [`BatteryStatus::Unknown`].
+/// The percentage and the coarse level still drive the battery indicator and the
+/// low-battery notice.
+fn battery_info(power: Power) -> BatteryInfo {
+    let percentage = (power.percent <= 100).then_some(power.percent);
+    let level = match power.percent {
+        0..=5 => BatteryLevel::Critical,
+        6..=20 => BatteryLevel::Low,
+        21..=95 => BatteryLevel::Good,
+        96..=100 => BatteryLevel::Full,
+        _ => BatteryLevel::Unknown,
+    };
+    BatteryInfo {
+        percentage,
+        level,
+        status: BatteryStatus::Unknown,
+    }
 }
 
 fn current_dpi(base: &BaseInfo) -> Result<Dpi, WriteError> {
@@ -287,6 +323,37 @@ async fn write_dpi_attempt(
             Ok(None)
         }
     }
+}
+
+/// Reads the battery and firmware without touching the sensor block.
+///
+/// The handshake response already carries power; one extra version request is
+/// enough. Callers that poll inventory should cap this with a timeout so a
+/// sleeping mouse cannot stretch a scan.
+pub async fn read_status(
+    backend: &dyn HidBackend,
+    route: &DeviceRoute,
+) -> Result<DeviceStatus, WriteError> {
+    if !is_route(route) {
+        return Err(WriteError::DeviceNotFound);
+    }
+    let _guard = SESSION_LOCK.lock().await;
+    let mut session = Session::open(backend, route).await?;
+    let power = parse_power(&session.handshake, session.contract);
+    let response = session
+        .request(
+            &cmd_version(session.mode),
+            ty::GET_VERSION,
+            0,
+            HidppOperation::ReadDpiCapabilities,
+        )
+        .await?;
+    let version = parse_version(&response);
+    let [major, minor, patch] = version.firmware;
+    Ok(DeviceStatus {
+        battery: Some(battery_info(power)),
+        firmware: Some(format!("{major}.{minor}.{patch}")),
+    })
 }
 
 /// Reads the current DPI and the values the driver exposes to the UI.

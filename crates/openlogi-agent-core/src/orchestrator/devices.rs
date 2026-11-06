@@ -267,9 +267,10 @@ pub(super) fn build_devices(
             online: device.online,
             // A standalone device reports no device-side setting changes.
             settings_revision: 0,
-            // Its name is its display name, and it reports no battery.
+            // Its name is its display name; a raw driver may still report
+            // battery and firmware over its own protocol.
             codename: None,
-            battery: None,
+            battery: device.battery.clone(),
         });
     }
     // Order by the same canonical key the GUI carousel uses, so the

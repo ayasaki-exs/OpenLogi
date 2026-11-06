@@ -715,6 +715,17 @@ pub struct StandaloneDevice {
     /// append-only GUI↔agent bincode wire format.
     #[serde(default)]
     pub registry_model_id: Option<String>,
+    /// Last battery reading for a raw driver that can supply one.
+    ///
+    /// Appended for the v46 wire format. `None` when the driver has no
+    /// battery path or the device was asleep during the scan.
+    #[serde(default)]
+    pub battery: Option<BatteryInfo>,
+    /// Firmware version string for a raw driver that can supply one.
+    ///
+    /// Appended for the v46 wire format.
+    #[serde(default)]
+    pub firmware: Option<String>,
 }
 
 impl StandaloneDevice {

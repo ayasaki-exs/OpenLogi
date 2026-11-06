@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use futures_lite::stream;
 use hidpp::async_trait;
+use openlogi_core::device::{BatteryLevel, BatteryStatus};
 use openlogi_core::hid::{Dpi, ReportRate, WriteError};
 
 use crate::backend::{
@@ -12,7 +13,7 @@ use crate::backend::{
 use crate::channel::route::DeviceRoute;
 use crate::darmoshark::{REPORT_LEN, decode_report_rate, encode_report_rate, level_mask};
 
-use super::{is_route, read_dpi, read_report_rate, set_dpi, set_report_rate};
+use super::{is_route, read_dpi, read_report_rate, read_status, set_dpi, set_report_rate};
 
 const MOCK_ID: &str = "mock-darmoshark";
 const MOCK_ROUTE_IDENTITY: &str = "id:mock-darmoshark";
@@ -29,6 +30,8 @@ struct MockState {
     sleep_ms: u16,
     delay: u8,
     sensor: u8,
+    battery_percent: u8,
+    firmware: [u8; 3],
 }
 
 impl Default for MockState {
@@ -45,6 +48,8 @@ impl Default for MockState {
             sleep_ms: 60,
             delay: 4,
             sensor: 0x20,
+            battery_percent: 81,
+            firmware: [0, 8, 1],
         }
     }
 }
@@ -150,9 +155,20 @@ impl MockRawChannel {
         response[0] = 1;
         response[3] = 1;
         response[5] = 1;
-        response[6] = 100;
+        response[6] = state.battery_percent;
         response[7] = 0;
         response[10] = state.max_rate;
+        self.push(response);
+    }
+
+    fn push_version(&mut self) {
+        let state = self.state();
+        let [major, minor, patch] = state.firmware;
+        let mut response = [0_u8; REPORT_LEN];
+        response[0] = 0;
+        response[3] = 0;
+        response[8] = (major << 4) | minor;
+        response[9] = patch;
         self.push(response);
     }
 
@@ -206,6 +222,7 @@ impl RawChannel for MockRawChannel {
         let ty = report[0] & 0x3f;
         let sub = report[3];
         match (ty, sub) {
+            (0, 0) => self.push_version(),
             (1, 1) => self.push_power(),
             (4, 1) => self.push_base_info(),
             (4, 2) => {
@@ -258,6 +275,21 @@ async fn reads_the_active_dpi_and_a_linear_supported_range() {
     assert!(info.capabilities.contains(Dpi::new(400)));
     assert!(info.capabilities.contains(Dpi::new(800)));
     assert_eq!(info.capabilities.values().len(), 600);
+}
+
+#[tokio::test]
+async fn reads_battery_and_firmware_without_touching_the_sensor_block() {
+    let backend = MockBackend::new();
+    let status = read_status(&backend, &MockBackend::route())
+        .await
+        .expect("mock answers");
+
+    let battery = status.battery.expect("battery reading");
+    assert_eq!(battery.percentage, Some(81));
+    assert_eq!(battery.level, BatteryLevel::Good);
+    assert_eq!(battery.status, BatteryStatus::Unknown);
+    assert_eq!(status.firmware.as_deref(), Some("0.8.1"));
+    assert_eq!(expect_state(&backend).rate, 1, "status must not write");
 }
 
 #[tokio::test]

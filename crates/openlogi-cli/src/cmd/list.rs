@@ -463,6 +463,8 @@ mod format_tests {
             light_capabilities: None,
             driver_id: "logitech-g600".into(),
             registry_model_id: None,
+            battery: None,
+            firmware: None,
         };
 
         assert_eq!(

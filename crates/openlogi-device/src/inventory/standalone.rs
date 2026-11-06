@@ -1,6 +1,7 @@
 //! Discovery of standalone raw-HID devices.
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use openlogi_core::device::{Capabilities, DeviceKind, RawDeviceAddress, StandaloneDevice};
 use openlogi_device_registry::darmoshark::{DARMOSHARK_DRIVER_ID, find_darmoshark};
@@ -26,6 +27,33 @@ pub async fn enumerate_standalone(
         .filter_map(|device| standalone_device(&device))
         .collect();
     validate_no_ambiguous_nodes(&devices)?;
+    let mut devices = devices;
+    for device in &mut devices {
+        if device.driver_id != DARMOSHARK_DRIVER_ID {
+            continue;
+        }
+        // A sleeping mouse would otherwise hold the scan for the driver's full
+        // retry budget. Two seconds is enough for an awake device (handshake +
+        // version) and keeps a cold scan bounded; the fields stay `None` when
+        // it does not answer.
+        match tokio::time::timeout(
+            Duration::from_secs(2),
+            crate::write::darmoshark::read_status(backend, &device.route()),
+        )
+        .await
+        {
+            Ok(Ok(status)) => {
+                device.battery = status.battery;
+                device.firmware = status.firmware;
+            }
+            Ok(Err(error)) => {
+                tracing::debug!(%error, "Darmoshark status read skipped");
+            }
+            Err(_) => {
+                tracing::debug!("Darmoshark status read timed out");
+            }
+        }
+    }
     Ok(devices)
 }
 
@@ -56,6 +84,8 @@ pub(super) fn standalone_device(device: &crate::backend::NodeInfo) -> Option<Sta
             light_capabilities: Some(litra_capabilities(descriptor.model)),
             driver_id: descriptor.driver_id.to_owned(),
             registry_model_id: Some(descriptor.registry_model_id.to_owned()),
+            battery: None,
+            firmware: None,
         });
     }
 
@@ -83,6 +113,8 @@ pub(super) fn standalone_device(device: &crate::backend::NodeInfo) -> Option<Sta
             light_capabilities: None,
             driver_id: GAMING_HEADSET_DRIVER_ID.to_owned(),
             registry_model_id: Some(descriptor.registry_model_id.to_owned()),
+            battery: None,
+            firmware: None,
         });
     }
 
@@ -116,6 +148,8 @@ pub(super) fn standalone_device(device: &crate::backend::NodeInfo) -> Option<Sta
             light_capabilities: None,
             driver_id: G600_DRIVER_ID.to_owned(),
             registry_model_id: None,
+            battery: None,
+            firmware: None,
         });
     }
 
@@ -157,6 +191,8 @@ fn darmoshark_standalone(device: &crate::backend::NodeInfo) -> Option<Standalone
         light_capabilities: None,
         driver_id: DARMOSHARK_DRIVER_ID.to_owned(),
         registry_model_id: None,
+        battery: None,
+        firmware: None,
     })
 }
 
@@ -304,6 +340,8 @@ mod tests {
             light_capabilities: None,
             driver_id: "litra".into(),
             registry_model_id: None,
+            battery: None,
+            firmware: None,
         }
     }
 
